@@ -1,1 +1,0 @@
-# namidxp.github.io
