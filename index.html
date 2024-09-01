@@ -1,1 +1,337 @@
-<h1>AOK</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Card Scanner</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: black;
+            color: white;
+        }
+        #camera-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #overlay {
+            position: absolute;
+            border: 4px solid orange;
+            box-sizing: border-box;
+        }
+        #feedback {
+            margin-top: 20px;
+            color: white;
+            font-size: 20px;
+            text-align: center;
+        }
+        #base64output, #OcrOutput {
+            width: 80%;
+            max-width: 600px;
+            height: 200px;
+            margin-top: 20px;
+            color: black;
+            font-size: 14px;
+            white-space: pre-wrap;
+            overflow-y: auto;
+            background-color: white;
+            box-sizing: border-box;
+            resize: vertical;
+            flex-shrink: 0;
+            min-height: 200px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="camera-container">
+    <video id="video" autoplay playsinline muted></video>
+    <div id="overlay"></div>
+</div>
+<div id="feedback">Align the card inside the rectangle</div>
+<textarea id="base64output" readonly></textarea><br/>
+<!--<textarea id="OcrOutput" readonly></textarea>-->
+
+<script>
+    function getParameterByName(name) {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.get(name);
+    }
+
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const feedback = document.getElementById('feedback');
+    const base64Output = document.getElementById('base64output');
+	//const OcrOut = document.getElementById('OcrOutput');
+
+    let tesseractWorker = null;
+
+    function initializeTesseract() {
+        if (!tesseractWorker) {
+            tesseractWorker = Tesseract.createWorker({
+                //logger: info => console.log(info),
+            });
+            tesseractWorker.load()
+                .then(() => tesseractWorker.loadLanguage('eng'))
+                .then(() => tesseractWorker.initialize('eng'))
+                .catch(err => console.error("Error initializing Tesseract: ", err));
+        }
+    }
+
+    function startCamera() {
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+        })
+        .then(stream => {
+            video.srcObject = stream;
+            video.style.display = 'block';
+            initializeTesseract();
+        })
+        .catch(err => {
+            console.error("Error accessing camera: ", err);
+        });
+    }
+
+    function updateOverlaySize() {
+        const containerWidth = document.getElementById('camera-container').clientWidth;
+        const containerHeight = document.getElementById('camera-container').clientHeight;
+        const scanType = getParameterByName('type'); // Get the 'type' parameter from URL (e.g., ?type=doc or ?type=card)
+
+        let overlayWidth, overlayHeight;
+
+        if (scanType === 'doc') {
+            const aspectRatio = 1 / 1.414; // A4 aspect ratio
+
+            overlayWidth = containerWidth * 0.7; // Set width to 70% of container's width
+            overlayHeight = overlayWidth / aspectRatio; // Calculate height based on A4 aspect ratio
+
+            if (overlayHeight > containerHeight * 0.9) {
+                overlayHeight = containerHeight * 0.9;
+                overlayWidth = overlayHeight * aspectRatio;
+            }
+        } else { // Default to 'card' dimensions if 'doc' is not specified
+            overlayWidth = containerWidth * 0.6;
+            overlayHeight = containerHeight * 0.3;
+        }
+
+        overlay.style.width = `${overlayWidth}px`;
+        overlay.style.height = `${overlayHeight}px`;
+        overlay.style.top = '50%';
+        overlay.style.left = '50%';
+        overlay.style.transform = 'translate(-50%, -50%)';
+    }
+
+    function captureImage(videoElement) {
+        if (videoElement.videoWidth === 0 || videoElement.videoHeight === 0) {
+            console.error('Video feed is not ready.');
+            return null;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = videoElement.videoWidth;
+        canvas.height = videoElement.videoHeight;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+
+        return canvas; // Return the full color canvas
+    }
+
+    function cropImageToRectangle(canvas, rectangleBounds) {
+        const ctx = canvas.getContext('2d');
+        const croppedCanvas = document.createElement('canvas');
+        croppedCanvas.width = rectangleBounds.width;
+        croppedCanvas.height = rectangleBounds.height;
+
+        const croppedContext = croppedCanvas.getContext('2d');
+        croppedContext.drawImage(
+            canvas, 
+            rectangleBounds.x, 
+            rectangleBounds.y, 
+            rectangleBounds.width, 
+            rectangleBounds.height,
+            0, 
+            0, 
+            rectangleBounds.width, 
+            rectangleBounds.height
+        );
+        return croppedCanvas; // Return the cropped canvas (inside rectangle)
+    }
+
+    // Edge detection using Sobel filter
+    function edgeDetection(canvas) {
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+
+        // Simple Sobel edge detection algorithm
+        const edgeThreshold = 100; // Adjust this value for better edge detection
+        let edges = 0;
+
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const intensity = (r + g + b) / 3;
+
+            if (intensity > edgeThreshold) {
+                edges++;
+            }
+        }
+
+        return edges > 1000; // If enough edges are detected
+    }
+
+    // Color validation (check if card background color is white or light)
+    function validateColor(canvas) {
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+
+        let lightPixels = 0;
+        const lightThreshold = 150;
+
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+
+            if (r > lightThreshold && g > lightThreshold && b > lightThreshold) {
+                lightPixels++;
+            }
+        }
+
+        return lightPixels / (canvas.width * canvas.height) > 0.5; // Consider it light if more than 50% of pixels are light
+    }
+
+    function checkForText(canvas, callback) {
+        if (!canvas) {
+            console.error('No canvas available for text detection.');
+            callback(false);
+            return;
+        }
+
+        const bounds = getRectangleBounds();
+        const croppedCanvas = cropImageToRectangle(canvas, bounds);
+
+        // Create a grayscale version of the cropped canvas for OCR
+        const grayCtx = croppedCanvas.getContext('2d', { willReadFrequently: true });
+        const imageData = grayCtx.getImageData(0, 0, croppedCanvas.width, croppedCanvas.height);
+        const data = imageData.data;
+
+        for (let i = 0; i < data.length; i += 4) {
+            const avg = (data[i] + data[i + 1] + data[i + 2]) / 3; // Grayscale
+            data[i] = avg;
+            data[i + 1] = avg;
+            data[i + 2] = avg;
+        }
+        grayCtx.putImageData(imageData, 0, 0);
+
+        if (tesseractWorker) {
+            tesseractWorker.recognize(croppedCanvas, {
+                tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+                dpi: 900,
+                psm: 1, // Assume a single block of text
+                oem: 1, // Use OCR engine mode
+            })
+            .then(({ data: { text } }) => {
+                const cleanedText = text.trim();
+				base64Output.value = cleanedText;
+                console.log('OCR Text:', cleanedText);
+                callback(cleanedText);
+            })
+            .catch(err => {
+                console.error("Error with Tesseract recognition:", err);
+                callback(false);
+            });
+        } else {
+            console.error("Tesseract worker not initialized.");
+            callback(false);
+        }
+    }
+
+    function stopCamera() {
+        const stream = video.srcObject;
+        if (stream) {
+            const tracks = stream.getTracks();
+            tracks.forEach(track => track.stop());
+        }
+    }
+
+    function displayCapturedImage(canvas, rectangleBounds) {
+        const croppedCanvas = cropImageToRectangle(canvas, rectangleBounds);
+
+        const dataURL = croppedCanvas.toDataURL('image/png');
+        const img = new Image();
+        img.src = dataURL;
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'contain';
+        overlay.innerHTML = '';
+        overlay.appendChild(img);
+
+        //base64Output.value = dataURL;
+    }
+
+    function getRectangleBounds() {
+        const videoRect = video.getBoundingClientRect();
+        const overlayRect = overlay.getBoundingClientRect();
+
+        const offsetX = overlayRect.left - videoRect.left;
+        const offsetY = overlayRect.top - videoRect.top;
+
+        return {
+            x: offsetX * (video.videoWidth / videoRect.width),
+            y: offsetY * (video.videoHeight / videoRect.height),
+            width: overlayRect.width * (video.videoWidth / videoRect.width),
+            height: overlayRect.height * (video.videoHeight / videoRect.height)
+        };
+    }
+
+    video.addEventListener('loadeddata', () => {
+        feedback.innerText = 'Align the card or document within the rectangle.';
+
+        setInterval(() => {
+            const canvas = captureImage(video);
+            const rectangleBounds = getRectangleBounds();
+
+            const edgesDetected = edgeDetection(cropImageToRectangle(canvas, rectangleBounds));
+            const isValidColor = validateColor(cropImageToRectangle(canvas, rectangleBounds));
+
+            if (edgesDetected && isValidColor) {
+            feedback.innerText = 'Card/Doc detected, Checking for text';
+            checkForText(canvas, text => {
+                if (text && (text.includes("State of Qatar") || text.includes("Residency Permit"))) {
+                    feedback.innerText = 'Doing Ocr';
+                    displayCapturedImage(canvas, rectangleBounds);
+                    stopCamera();
+                } else {
+                    feedback.innerText = 'Align the card or document correctly.';
+                }
+            });
+        } else {
+            feedback.innerText = 'No card/document detected or incorrect alignment. Please adjust.';
+        }
+    }, 1000); // Check every second
+    });
+
+    startCamera();
+    window.addEventListener('resize', updateOverlaySize);
+    window.addEventListener('load', updateOverlaySize);
+</script>
+<script src="https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js"></script>
+</body>
+</html>
