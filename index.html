@@ -303,7 +303,7 @@
 
     video.addEventListener('loadeddata', () => {
         feedback.innerText = 'Align the card or document within the rectangle.';
-
+		const wordsToCheck = ["hello", "bye"];
         setInterval(() => {
             const canvas = captureImage(video);
             const rectangleBounds = getRectangleBounds();
@@ -314,7 +314,8 @@
             if (edgesDetected && isValidColor) {
             feedback.innerText = 'Card/Doc detected, Checking for text';
             checkForText(canvas, text => {
-                if (text && (text.includes("State of Qatar") || text.includes("Residency Permit"))) {
+				const containsWord = wordsToCheck.some(word => text.includes(word));
+                if (containsWord) {
                     feedback.innerText = 'Doing Ocr';
                     displayCapturedImage(canvas, rectangleBounds);
                     stopCamera();
