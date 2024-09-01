@@ -302,19 +302,25 @@
     }
 
     video.addEventListener('loadeddata', () => {
-        feedback.innerText = 'Align the card or document within the rectangle.';
-		const wordsToCheck = ["hello", "bye"];
-        setInterval(() => {
-            const canvas = captureImage(video);
-            const rectangleBounds = getRectangleBounds();
+    feedback.innerText = 'Align the card or document within the rectangle.';
 
-            const edgesDetected = edgeDetection(cropImageToRectangle(canvas, rectangleBounds));
-            const isValidColor = validateColor(cropImageToRectangle(canvas, rectangleBounds));
+    // Define a list of words to check for
+    const wordsToCheck = ["state of qatar", "residency permit", "driving license", "passport"].map(word => word.toLowerCase());
 
-            if (edgesDetected && isValidColor) {
+    setInterval(() => {
+        const canvas = captureImage(video);
+        const rectangleBounds = getRectangleBounds();
+
+        const edgesDetected = edgeDetection(cropImageToRectangle(canvas, rectangleBounds));
+        const isValidColor = validateColor(cropImageToRectangle(canvas, rectangleBounds));
+
+        if (edgesDetected && isValidColor) {
             feedback.innerText = 'Card/Doc detected, Checking for text';
             checkForText(canvas, text => {
-				const containsWord = wordsToCheck.some(word => text.includes(word));
+                // Convert the detected text to lowercase for case-insensitive comparison
+                const lowerCaseText = text.toLowerCase();
+                // Check if the detected text includes any of the words in the list
+                const containsWord = wordsToCheck.some(word => lowerCaseText.includes(word));
                 if (containsWord) {
                     feedback.innerText = 'Doing Ocr';
                     displayCapturedImage(canvas, rectangleBounds);
@@ -327,7 +333,8 @@
             feedback.innerText = 'No card/document detected or incorrect alignment. Please adjust.';
         }
     }, 1000); // Check every second
-    });
+});
+
 
     startCamera();
     window.addEventListener('resize', updateOverlaySize);
